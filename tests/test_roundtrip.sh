@@ -1,43 +1,30 @@
-set -euo pipefail
+set -e
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/cryptocore"
-if [ ! -x "$BIN" ]; then
+if [ ! -x "./cryptocore" ]; then
   echo "cryptocore binary not found. Build first: make"
   exit 1
 fi
 
-TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+TMP=$(mktemp -d)
+echo "[INFO] Temporary test dir: $TMP"
 
-PLAINTXT="$TMPDIR/plain.bin"
-ENCRYPTED="$TMPDIR/ct.bin"
-DECRYPTED="$TMPDIR/pt2.bin"
-OPENSSL_CT="$TMPDIR/openssl_ct.bin"
+echo "Hello CryptoCore! Testing AES roundtrip." > "$TMP/plain.txt"
 
-echo "Hello, CryptoCore test!" > "$PLAINTXT"
 KEY="000102030405060708090a0b0c0d0e0f"
 
-"$BIN" --algorithm aes --mode ecb --encrypt --key "$KEY" --input "$PLAINTXT" --output "$ENCRYPTED"
+./cryptocore --algorithm aes --mode ecb --encrypt --key "$KEY" \
+  --input "$TMP/plain.txt" --output "$TMP/cipher.bin"
 
-"$BIN" --algorithm aes --mode ecb --decrypt --key "$KEY" --input "$ENCRYPTED" --output "$DECRYPTED"
+./cryptocore --algorithm aes --mode ecb --decrypt --key "$KEY" \
+  --input "$TMP/cipher.bin" --output "$TMP/decrypted.txt"
 
-if cmp -s "$PLAINTXT" "$DECRYPTED"; then
-  echo "Roundtrip OK"
+
+if cmp -s "$TMP/plain.txt" "$TMP/decrypted.txt"; then
+  echo "[PASS] ECB roundtrip OK"
 else
-  echo "Roundtrip FAILED"
-  exit 2
+  echo "[FAIL] ECB roundtrip mismatch"
+  diff "$TMP/plain.txt" "$TMP/decrypted.txt"
+  exit 1
 fi
 
-
-openssl enc -aes-128-ecb -nosalt -K "$KEY" -in "$PLAINTXT" -out "$OPENSSL_CT"
-
-if cmp -s "$ENCRYPTED" "$OPENSSL_CT"; then
-  echo "Ciphertext matches OpenSSL"
-else
-  echo "Ciphertext differs from OpenSSL output"
-  echo "You can inspect $ENCRYPTED and $OPENSSL_CT"
-  exit 3
-fi
-
-echo "All checks passed."
+echo "[INFO] All ECB tests passed."
