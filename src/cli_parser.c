@@ -65,8 +65,8 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
     out->decrypt = false;
     out->key_hex = NULL;
     out->iv_hex = NULL;
-    out->input_path = NULL;
-    out->output_path = NULL;
+    out->input = NULL;
+    out->output = NULL;
 
     static struct option long_options[] = {
         {"algorithm", required_argument, 0, 0},
@@ -102,9 +102,9 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
             if (optarg[0] == '@') out->iv_hex = strdup(optarg + 1);
             else out->iv_hex = strdup(optarg);
         } else if (strcmp(name, "input") == 0) {
-            out->input_path = strdup(optarg);
+            out->input= strdup(optarg);
         } else if (strcmp(name, "output") == 0) {
-            out->output_path = strdup(optarg);
+            out->output = strdup(optarg);
         } else if (strcmp(name, "help") == 0) {
             print_usage(argv[0]);
             return 1;
@@ -156,13 +156,13 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
         }
     }
 
-    if (!out->input_path) {
+    if (!out->input) {
         fprintf(stderr, "Error: --input required\n"); print_usage(argv[0]); return 2;
     }
 
-    if (!out->output_path) {
-        out->output_path = derive_output_filename(out->input_path, out->encrypt);
-        if (!out->output_path) { fprintf(stderr, "Error: memory\n"); return 2; }
+    if (!out->output) {
+        out->output = derive_output_filename(out->input, out->encrypt);
+        if (!out->output) { fprintf(stderr, "Error: memory\n"); return 2; }
     }
 
     return 0;
@@ -174,6 +174,6 @@ void free_cli_args(cli_args_t *args) {
     free(args->mode);
     free(args->key_hex);
     free(args->iv_hex);
-    free(args->input_path);
-    free(args->output_path);
+    free(args->input);
+    free(args->output);
 }

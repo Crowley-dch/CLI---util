@@ -12,8 +12,8 @@ typedef struct {
     bool decrypt;
     char *key_hex;     
     char *iv_hex;      
-    char *input_path;
-    char *output_path; 
+    char *input;
+    char *output; 
 } cli_args_t;
 
 int parse_cli_args(int argc, char **argv, cli_args_t *out);
