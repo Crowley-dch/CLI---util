@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <stdbool.h>
 
 static void print_usage(const char *prog) {
     fprintf(stderr,
@@ -102,9 +103,9 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
             if (optarg[0] == '@') out->iv_hex = strdup(optarg + 1);
             else out->iv_hex = strdup(optarg);
         } else if (strcmp(name, "input") == 0) {
-            out->input= strdup(optarg);
+            out->input = strdup(optarg);
         } else if (strcmp(name, "output") == 0) {
-            out->output = strdup(optarg);
+            out->output= strdup(optarg);
         } else if (strcmp(name, "help") == 0) {
             print_usage(argv[0]);
             return 1;
@@ -132,14 +133,17 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
         print_usage(argv[0]); return 2;
     }
 
-    if (!out->key_hex) {
-        fprintf(stderr, "Error: --key required\n"); print_usage(argv[0]); return 2;
+    /* Key: required for decrypt, optional for encrypt (we can auto-generate key for encryption) */
+    if (!out->key_hex && out->decrypt) {
+        fprintf(stderr, "Error: --key required for decryption\n"); print_usage(argv[0]); return 2;
     }
-    if (strlen(out->key_hex) != 32) {
-        fprintf(stderr, "Error: key must be 32 hex characters (16 bytes)\n"); return 2;
-    }
-    if (!is_hex_string(out->key_hex, 32)) {
-        fprintf(stderr, "Error: key contains non-hex characters\n"); return 2;
+    if (out->key_hex) {
+        if (strlen(out->key_hex) != 32) {
+            fprintf(stderr, "Error: key must be 32 hex characters (16 bytes)\n"); return 2;
+        }
+        if (!is_hex_string(out->key_hex, 32)) {
+            fprintf(stderr, "Error: key contains non-hex characters\n"); return 2;
+        }
     }
 
     if (out->iv_hex) {
