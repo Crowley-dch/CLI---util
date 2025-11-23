@@ -113,6 +113,9 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
         {"input", required_argument, 0, 0},
         {"output", required_argument, 0, 0},
         {"help", no_argument, 0, 0},
+        {"hmac", no_argument, 0, 0},           
+        {"cmac", no_argument, 0, 0},           
+        {"verify", required_argument, 0, 0}, 
         {0,0,0,0}
     };
 
@@ -151,6 +154,15 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
 
         } else if (strcmp(name, "output") == 0) {
             out->output = strdup(optarg);
+        
+        } else if (strcmp(name, "hmac") == 0) {
+            out->hmac_mode = true;
+       
+        } else if (strcmp(name, "cmac") == 0) {
+            out->cmac_mode = true;
+       
+        } else if (strcmp(name, "verify") == 0) {
+            out->verify_file = strdup(optarg);
 
         } else if (strcmp(name, "help") == 0) {
             print_usage(argv[0]);
@@ -172,7 +184,10 @@ int validate_dgst_arguments(cli_args_t *args, const char *prog_name) {
         fprintf(stderr, "Supported algorithms: sha256, blake2b\n");
         return 2;
     }
-
+    if (args->hmac_mode && !args->key_hex) {
+        fprintf(stderr, "Error: --key is required when using --hmac\n");
+        return 2;
+    }
     if (strcmp(args->algorithm, "sha256") != 0 && 
         strcmp(args->algorithm, "blake2b") != 0) {
         fprintf(stderr, "Error: Unsupported hash algorithm '%s'\n", args->algorithm);
@@ -234,6 +249,14 @@ int validate_crypto_arguments(cli_args_t *args, const char *prog_name) {
             fprintf(stderr, "Error: invalid mode\n");
             return 2;
         }
+    }
+     if (args->verify_file) {
+        FILE *test = fopen(args->verify_file, "r");
+        if (!test) {
+            fprintf(stderr, "Error: Verify file '%s' cannot be opened\n", args->verify_file);
+            return 2;
+        }
+        fclose(test);
     }
 
     if (args->encrypt == args->decrypt) {

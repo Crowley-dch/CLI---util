@@ -2,6 +2,7 @@
 #define FILE_IO_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #define AES_BLOCK_SIZE 16
 
@@ -35,4 +36,7 @@ int compute_file_hash_stream(const char *filename,
                            int (*update_func)(const unsigned char *, size_t),
                            int (*final_func)(unsigned char *));
 
+int read_hmac_from_file(const char *filename, char *hmac_buffer, size_t buffer_size); // IO-2
+int verify_hmac_file(const char *input_file, const char *hmac_file, 
+                    const uint8_t *key, size_t key_len, int *verification_result); 
 #endif

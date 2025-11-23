@@ -9,81 +9,87 @@
 #include "modes/ctr.h"
 #include "csprng.h"
 #include "hash/sha256.h"
-
+#include "hash/blake2b.h"
+#include "mac/hmac.h"
+#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <openssl/evp.h>
-#include <openssl/err.h>
 
 #define AES_BLOCK_SIZE 16
 
 static int hex_to_bytes_local(const char *hex, unsigned char *out, size_t out_len);
 static void print_hex(const unsigned char *data, size_t len);
 
-static void print_hash_sum_format(const char *hash_value, const char *input_file) {
-    printf("%s  %s\n", hash_value, input_file);
-}
-
-static char* blake2b_hash_file_openssl(const char *filename, size_t outlen) {
-    FILE *file = fopen(filename, "rb");
-    if (!file) {
-        return NULL;
+static int handle_hmac_command(const cli_args_t *args) {
+    uint8_t key_bytes[1024]; 
+    size_t key_len;
+    uint8_t hmac_result[32];
+    int rc;
+    
+    if (hex_to_bytes_local(args->key_hex, key_bytes, sizeof(key_bytes)) != 0) {
+        fprintf(stderr, "[ERROR] Invalid key format. Must be hexadecimal.\n");
+        return 60;
     }
     
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    const EVP_MD *md = EVP_blake2b512(); 
-    if (!md || !ctx || EVP_DigestInit_ex(ctx, md, NULL) != 1) {
-        if (ctx) EVP_MD_CTX_free(ctx);
-        fclose(file);
-        return NULL;
+    key_len = strlen(args->key_hex) / 2;
+    
+    printf("[INFO] Computing HMAC-%s for '%s' with key length %zu bytes\n", 
+           args->algorithm, args->input, key_len);
+    
+    if (strcmp(args->algorithm, "sha256") == 0) {
+        rc = hmac_sha256_file(args->input, key_bytes, key_len, hmac_result);
+    } else {
+        fprintf(stderr, "[ERROR] HMAC only supported with sha256 algorithm\n");
+        return 61;
     }
     
-    const size_t BUFFER_SIZE = 8192;
-    unsigned char buffer[BUFFER_SIZE];
-    size_t bytes_read;
+    if (rc != 0) {
+        fprintf(stderr, "[ERROR] Failed to compute HMAC\n");
+        return 62;
+    }
     
-    while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-        if (EVP_DigestUpdate(ctx, buffer, bytes_read) != 1) {
-            EVP_MD_CTX_free(ctx);
-            fclose(file);
-            return NULL;
+    char hmac_hex[65];
+    for (int i = 0; i < 32; i++) {
+        sprintf(hmac_hex + i*2, "%02x", hmac_result[i]);
+    }
+    hmac_hex[64] = '\0';
+    
+    if (args->verify_file) {
+        int verification_result;
+        
+        if (verify_hmac_file(args->input, args->verify_file, key_bytes, key_len, &verification_result) != 0) {
+            fprintf(stderr, "[ERROR] Failed to verify HMAC\n");
+            return 63;
+        }
+        
+        if (verification_result) {
+            printf("[OK] HMAC verification successful\n");
+            return 0;
+        } else {
+            printf("[ERROR] HMAC verification failed\n");
+            return 64;
         }
     }
     
-    if (ferror(file)) {
-        EVP_MD_CTX_free(ctx);
-        fclose(file);
-        return NULL;
+    if (args->output) {
+        if (write_hash_to_file(args->output, hmac_hex, args->input) != 0) {
+            fprintf(stderr, "[ERROR] Failed to write HMAC to file\n");
+            return 65;
+        }
+        printf("[INFO] HMAC written to: %s\n", args->output);
+    } else {
+        printf("%s  %s\n", hmac_hex, args->input);
     }
     
-    unsigned char hash[64];
-    unsigned int hash_len;
-    if (EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1) {
-        EVP_MD_CTX_free(ctx);
-        fclose(file);
-        return NULL;
-    }
-    
-    EVP_MD_CTX_free(ctx);
-    fclose(file);
-    
-    if (outlen > hash_len) outlen = hash_len;
-    
-    char *hex_hash = malloc(outlen * 2 + 1);
-    if (!hex_hash) {
-        return NULL;
-    }
-    
-    for (size_t i = 0; i < outlen; i++) {
-        sprintf(hex_hash + i * 2, "%02x", hash[i]);
-    }
-    hex_hash[outlen * 2] = '\0';
-    
-    return hex_hash;
+    return 0;
 }
 
 static int handle_dgst_command(const cli_args_t *args) {
+    if (args->hmac_mode) {
+        return handle_hmac_command(args);
+    }
+    
     char *hash_value = NULL;
     int result = 0;
     
@@ -132,10 +138,10 @@ static int handle_dgst_command(const cli_args_t *args) {
             result = 54;
         } else {
             printf("[INFO] Hash written to: %s\n", args->output);
-            print_hash_sum_format(hash_value, args->input);
+            printf("%s  %s\n", hash_value, args->input);
         }
     } else {
-        print_hash_sum_format(hash_value, args->input);
+        printf("%s  %s\n", hash_value, args->input);
     }
     
     free(hash_value);
@@ -144,7 +150,6 @@ static int handle_dgst_command(const cli_args_t *args) {
 
 int main(int argc, char **argv) {
     int rc = 0;
-
     cli_args_t args;
     memset(&args, 0, sizeof(args));
 

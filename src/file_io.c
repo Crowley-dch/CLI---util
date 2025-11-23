@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "mac/hmac.h" 
 #include <openssl/rand.h>
 #include <errno.h>
 
@@ -227,4 +228,54 @@ int compute_file_hash_stream(const char *filename,
     
     fclose(file);
     return result;
+}
+
+int read_hmac_from_file(const char *filename, char *hmac_buffer, size_t buffer_size) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        return -1;
+    }
+    
+    if (fgets(hmac_buffer, buffer_size, file) == NULL) {
+        fclose(file);
+        return -2;
+    }
+    
+    fclose(file);
+    
+    size_t len = strlen(hmac_buffer);
+    if (len > 0 && hmac_buffer[len-1] == '\n') {
+        hmac_buffer[len-1] = '\0';
+    }
+    
+    return 0;
+}
+
+int verify_hmac_file(const char *input_file, const char *hmac_file, 
+                    const uint8_t *key, size_t key_len, int *verification_result) {
+    uint8_t computed_hmac[32];
+    char expected_hmac_hex[65];
+    
+    if (hmac_sha256_file(input_file, key, key_len, computed_hmac) != 0) {
+        return -1; 
+    }
+    
+    if (read_hmac_from_file(hmac_file, expected_hmac_hex, sizeof(expected_hmac_hex)) != 0) {
+        return -2; 
+    }
+    
+    char expected_hash_part[65];
+    strncpy(expected_hash_part, expected_hmac_hex, 64);
+    expected_hash_part[64] = '\0';
+    
+    char computed_hmac_hex[65];
+    for (int i = 0; i < 32; i++) {
+        sprintf(computed_hmac_hex + i*2, "%02x", computed_hmac[i]);
+    }
+    computed_hmac_hex[64] = '\0';
+    
+
+    *verification_result = (strcmp(computed_hmac_hex, expected_hash_part) == 0);
+    
+    return 0; 
 }

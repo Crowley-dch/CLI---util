@@ -21,6 +21,9 @@ typedef struct {
     char *iv_hex;
     
     bool digest_mode;
+    bool hmac_mode;          
+    bool cmac_mode;          
+    char *verify_file;
 } cli_args_t;
 
 int parse_cli_args(int argc, char **argv, cli_args_t *out);
