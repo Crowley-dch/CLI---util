@@ -6,5 +6,6 @@ set -euo pipefail
 ./tests/test_roundtrip.sh
 ./tests/test_csprng_roundstrip.sh
 ./tests/test_csprng_unique.sh
+./tests/test_hash_vectors.sh
 
 echo "[ALL] All mode tests passed."

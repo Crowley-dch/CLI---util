@@ -8,18 +8,23 @@
 
 static void print_usage(const char *prog) {
     fprintf(stderr,
-        "Usage: %s --algorithm aes --mode <ecb|cbc|cfb|ofb|ctr> (--encrypt | --decrypt)\n"
-        "          --key <hex32> [--iv <hex16>] --input <file> [--output <file>]\n\n"
+        "Usage:\n"
+        "  Encryption/decryption:\n"
+        "    %s --algorithm aes --mode <ecb|cbc|cfb|ofb|ctr> (--encrypt | --decrypt)\n"
+        "       --key <hex32> [--iv <hex16>] --input <file> [--output <file>]\n\n"
+        "  Hashing (dgst command):\n"
+        "    %s dgst --algorithm <sha256|blake2b> --input <file> [--output <file>]\n\n"
         "Notes:\n"
         "  key: 32 hex chars (16 bytes). Leading '@' optionally allowed.\n"
-        "  iv: 32 hex chars (16 bytes). Only meaningful for decryption; for encryption IV is\n"
-        "      generated automatically and prepended to the output file. If provided during\n"
-        "      encryption it will be ignored (warning).\n",
-        prog);
+        "  iv: 32 hex chars (16 bytes). Only meaningful for decryption.\n"
+        "  hash algorithms: sha256, blake2b\n",
+        prog, prog
+    );
 }
 
 char *derive_output_filename(const char *input, int is_encrypt) {
     size_t len = strlen(input);
+
     if (is_encrypt) {
         char *out = malloc(len + 5);
         if (!out) return NULL;
@@ -28,9 +33,11 @@ char *derive_output_filename(const char *input, int is_encrypt) {
     } else {
         const char *suf = ".enc";
         size_t suf_len = strlen(suf);
+
         if (len > suf_len && strcmp(input + len - suf_len, suf) == 0) {
             char *out = malloc(len - suf_len + 5);
             if (!out) return NULL;
+
             strncpy(out, input, len - suf_len);
             out[len - suf_len] = '\0';
             strcat(out, ".dec");
@@ -44,9 +51,27 @@ char *derive_output_filename(const char *input, int is_encrypt) {
     }
 }
 
+char *derive_hash_output_filename(const char *input, const char *algorithm) {
+    size_t len = strlen(input);
+    char *out = malloc(len + 10); 
+    
+    if (!out) return NULL;
+    
+    if (strcmp(algorithm, "sha256") == 0) {
+        sprintf(out, "%s.sha256", input);
+    } else if (strcmp(algorithm, "blake2b") == 0) {
+        sprintf(out, "%s.blake2b", input);
+    } else {
+        sprintf(out, "%s.hash", input); 
+    }
+    
+    return out;
+}
+
 static int is_hex_string(const char *s, size_t expect_len) {
     if (!s) return 0;
     if (strlen(s) != expect_len) return 0;
+
     for (size_t i = 0; i < expect_len; ++i) {
         char c = s[i];
         if (!((c >= '0' && c <= '9') ||
@@ -60,6 +85,7 @@ static int is_hex_string(const char *s, size_t expect_len) {
 
 int parse_cli_args(int argc, char **argv, cli_args_t *out) {
     if (!out) return -1;
+
     out->algorithm = NULL;
     out->mode = NULL;
     out->encrypt = false;
@@ -68,6 +94,14 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
     out->iv_hex = NULL;
     out->input = NULL;
     out->output = NULL;
+    out->digest_mode = false;
+    out->subcommand = SUBCMD_NONE;
+
+    if (argc >= 2 && strcmp(argv[1], "dgst") == 0) {
+        out->subcommand = SUBCMD_DGST;
+        argc--;
+        argv++;
+    }
 
     static struct option long_options[] = {
         {"algorithm", required_argument, 0, 0},
@@ -83,90 +117,165 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
     };
 
     int opt_index = 0;
+    optind = 1; 
+
     while (1) {
         int c = getopt_long(argc, argv, "", long_options, &opt_index);
         if (c == -1) break;
-        if (c != 0) continue; 
+        if (c != 0) continue;
+
         const char *name = long_options[opt_index].name;
+
         if (strcmp(name, "algorithm") == 0) {
             out->algorithm = strdup(optarg);
+
         } else if (strcmp(name, "mode") == 0) {
             out->mode = strdup(optarg);
+
         } else if (strcmp(name, "encrypt") == 0) {
             out->encrypt = true;
+
         } else if (strcmp(name, "decrypt") == 0) {
             out->decrypt = true;
+
         } else if (strcmp(name, "key") == 0) {
             if (optarg[0] == '@') out->key_hex = strdup(optarg + 1);
             else out->key_hex = strdup(optarg);
+
         } else if (strcmp(name, "iv") == 0) {
             if (optarg[0] == '@') out->iv_hex = strdup(optarg + 1);
             else out->iv_hex = strdup(optarg);
+
         } else if (strcmp(name, "input") == 0) {
             out->input = strdup(optarg);
+
         } else if (strcmp(name, "output") == 0) {
-            out->output= strdup(optarg);
+            out->output = strdup(optarg);
+
         } else if (strcmp(name, "help") == 0) {
             print_usage(argv[0]);
             return 1;
         }
     }
 
-    if (!out->algorithm || strcmp(out->algorithm, "aes") != 0) {
-        fprintf(stderr, "Error: --algorithm must be 'aes'\n");
-        print_usage(argv[0]); return 2;
+    if (out->subcommand == SUBCMD_DGST) {
+        return validate_dgst_arguments(out, argv[0]);
     }
-    if (!out->mode) {
-        fprintf(stderr, "Error: --mode is required\n");
-        print_usage(argv[0]); return 2;
-    } else {
-        const char *m = out->mode;
-        if (! (strcmp(m,"ecb")==0 || strcmp(m,"cbc")==0 || strcmp(m,"cfb")==0 ||
-               strcmp(m,"ofb")==0 || strcmp(m,"ctr")==0) ) {
-            fprintf(stderr, "Error: --mode must be one of: ecb, cbc, cfb, ofb, ctr\n");
+
+    return validate_crypto_arguments(out, argv[0]);
+}
+
+int validate_dgst_arguments(cli_args_t *args, const char *prog_name) {
+    (void)prog_name;
+    if (!args->algorithm) {
+        fprintf(stderr, "Error: --algorithm is required for dgst command\n");
+        fprintf(stderr, "Supported algorithms: sha256, blake2b\n");
+        return 2;
+    }
+
+    if (strcmp(args->algorithm, "sha256") != 0 && 
+        strcmp(args->algorithm, "blake2b") != 0) {
+        fprintf(stderr, "Error: Unsupported hash algorithm '%s'\n", args->algorithm);
+        fprintf(stderr, "Supported algorithms: sha256, blake2b\n");
+        return 2;
+    }
+
+    if (args->mode) {
+        fprintf(stderr, "Error: --mode cannot be used with dgst command\n");
+        return 2;
+    }
+    
+    if (args->encrypt || args->decrypt) {
+        fprintf(stderr, "Error: --encrypt/--decrypt cannot be used with dgst command\n");
+        return 2;
+    }
+    
+    if (args->key_hex) {
+        fprintf(stderr, "Error: --key cannot be used with dgst command\n");
+        return 2;
+    }
+    
+    if (args->iv_hex) {
+        fprintf(stderr, "Error: --iv cannot be used with dgst command\n");
+        return 2;
+    }
+
+    if (!args->input) {
+        fprintf(stderr, "Error: --input is required for dgst command\n");
+        return 2;
+    }
+
+    if (!args->output) {
+        args->output = derive_hash_output_filename(args->input, args->algorithm);
+        if (!args->output) {
+            fprintf(stderr, "Error: Memory allocation failed\n");
             return 2;
         }
     }
 
-    if (out->encrypt == out->decrypt) {
+    return 0;
+}
+
+int validate_crypto_arguments(cli_args_t *args, const char *prog_name) {
+    if (!args->algorithm || strcmp(args->algorithm, "aes") != 0) {
+        fprintf(stderr, "Error: --algorithm must be 'aes'\n");
+        print_usage(prog_name);
+        return 2;
+    }
+
+    if (!args->mode) {
+        fprintf(stderr, "Error: --mode is required\n");
+        print_usage(prog_name);
+        return 2;
+    } else {
+        const char *m = args->mode;
+        if (!(strcmp(m,"ecb")==0 || strcmp(m,"cbc")==0 || strcmp(m,"cfb")==0 ||
+              strcmp(m,"ofb")==0 || strcmp(m,"ctr")==0)) {
+            fprintf(stderr, "Error: invalid mode\n");
+            return 2;
+        }
+    }
+
+    if (args->encrypt == args->decrypt) {
         fprintf(stderr, "Error: specify exactly one of --encrypt or --decrypt\n");
-        print_usage(argv[0]); return 2;
+        return 2;
     }
 
-    /* Key: required for decrypt, optional for encrypt (we can auto-generate key for encryption) */
-    if (!out->key_hex && out->decrypt) {
-        fprintf(stderr, "Error: --key required for decryption\n"); print_usage(argv[0]); return 2;
-    }
-    if (out->key_hex) {
-        if (strlen(out->key_hex) != 32) {
-            fprintf(stderr, "Error: key must be 32 hex characters (16 bytes)\n"); return 2;
-        }
-        if (!is_hex_string(out->key_hex, 32)) {
-            fprintf(stderr, "Error: key contains non-hex characters\n"); return 2;
-        }
+    if (!args->key_hex && args->decrypt) {
+        fprintf(stderr, "Error: --key required for decryption\n");
+        return 2;
     }
 
-    if (out->iv_hex) {
-        if (strlen(out->iv_hex) != 32) {
-            fprintf(stderr, "Error: iv must be 32 hex characters (16 bytes) if provided\n"); return 2;
-        }
-        if (!is_hex_string(out->iv_hex, 32)) {
-            fprintf(stderr, "Error: iv contains non-hex characters\n"); return 2;
-        }
-        if (out->encrypt) {
-            fprintf(stderr, "Warning: --iv provided for encryption; it will be ignored (IV is auto-generated).\n");
-            free(out->iv_hex);
-            out->iv_hex = NULL;
+    if (args->key_hex) {
+        if (!is_hex_string(args->key_hex, 32)) {
+            fprintf(stderr, "Error: key must be exactly 32 hex chars\n");
+            return 2;
         }
     }
 
-    if (!out->input) {
-        fprintf(stderr, "Error: --input required\n"); print_usage(argv[0]); return 2;
+    if (args->iv_hex) {
+        if (!is_hex_string(args->iv_hex, 32)) {
+            fprintf(stderr, "Error: iv must be 32 hex chars\n");
+            return 2;
+        }
+        if (args->encrypt) {
+            fprintf(stderr, "Warning: --iv ignored during encryption\n");
+            free(args->iv_hex);
+            args->iv_hex = NULL;
+        }
     }
 
-    if (!out->output) {
-        out->output = derive_output_filename(out->input, out->encrypt);
-        if (!out->output) { fprintf(stderr, "Error: memory\n"); return 2; }
+    if (!args->input) {
+        fprintf(stderr, "Error: --input required\n");
+        return 2;
+    }
+
+    if (!args->output) {
+        args->output = derive_output_filename(args->input, args->encrypt);
+        if (!args->output) {
+            fprintf(stderr, "Error: memory\n");
+            return 2;
+        }
     }
 
     return 0;
