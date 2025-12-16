@@ -5,20 +5,85 @@
 #include <string.h>
 #include <getopt.h>
 #include <stdbool.h>
+#include <stdint.h>
+int is_gcm_mode(const cli_args_t *args) {
+    return args->mode && strcmp(args->mode, "gcm") == 0;
+}
+
+int get_aad_bytes(const cli_args_t *args, uint8_t **aad, size_t *aad_len) {
+    if (!args->aad_hex) {
+        *aad = NULL;
+        *aad_len = 0;
+        return 0; 
+    }
+    
+    size_t hex_len = strlen(args->aad_hex);
+    if (hex_len % 2 != 0) {
+        return -1; 
+    }
+    
+    *aad_len = hex_len / 2;
+    *aad = malloc(*aad_len);
+    if (!*aad) {
+        return -2;
+    }
+    
+    for (size_t i = 0; i < *aad_len; i++) {
+        unsigned int byte;
+        if (sscanf(args->aad_hex + i*2, "%2x", &byte) != 1) {
+            free(*aad);
+            return -3;
+        }
+        (*aad)[i] = (uint8_t)byte;
+    }
+    
+    return 0;
+}
+
+int validate_gcm_nonce(const cli_args_t *args, const char *prog_name) {
+    (void)prog_name;
+    
+    if (!args->iv_hex) {
+        return 0; 
+    }
+    
+    size_t iv_len = strlen(args->iv_hex);
+    
+    if (iv_len != 24) {
+        fprintf(stderr, "Warning: GCM typically uses 12-byte nonce (24 hex chars)\n");
+        fprintf(stderr, "Got %zu hex chars, which is %zu bytes\n", iv_len, iv_len/2);
+    }
+    
+    for (size_t i = 0; i < iv_len; ++i) {
+        char c = args->iv_hex[i];
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F'))) {
+            fprintf(stderr, "Error: Invalid nonce format. Must be hexadecimal.\n");
+            return -1;
+        }
+    }
+    
+    return 0;
+}
 
 static void print_usage(const char *prog) {
     fprintf(stderr,
         "Usage:\n"
         "  Encryption/decryption:\n"
-        "    %s --algorithm aes --mode <ecb|cbc|cfb|ofb|ctr> (--encrypt | --decrypt)\n"
-        "       --key <hex32> [--iv <hex16>] --input <file> [--output <file>]\n\n"
+        "    %s --algorithm aes --mode <ecb|cbc|cfb|ofb|ctr|gcm> (--encrypt | --decrypt)\n"
+        "       --key <hex32> [--iv <hex16/hex24>] [--aad <hex>] --input <file> [--output <file>]\n\n"
         "  Hashing (dgst command):\n"
-        "    %s dgst --algorithm <sha256|blake2b> --input <file> [--output <file>]\n\n"
+        "    %s dgst --algorithm <sha256|blake2b> --input <file> [--output <file>]\n"
+        "    %s dgst --algorithm sha256 --hmac --key <hex> --input <file> [--verify <file>]\n\n"
         "Notes:\n"
         "  key: 32 hex chars (16 bytes). Leading '@' optionally allowed.\n"
-        "  iv: 32 hex chars (16 bytes). Only meaningful for decryption.\n"
+        "  iv: 32 hex chars (16 bytes) for CBC/CFB/OFB/CTR\n"
+        "  iv: 24 hex chars (12 bytes) for GCM (nonce, optional)\n"
+        "  aad: hex string for GCM mode (optional, authenticated but not encrypted)\n"
+        "  modes: ecb, cbc, cfb, ofb, ctr, gcm\n"
         "  hash algorithms: sha256, blake2b\n",
-        prog, prog
+        prog, prog, prog
     );
 }
 
@@ -92,10 +157,14 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
     out->decrypt = false;
     out->key_hex = NULL;
     out->iv_hex = NULL;
+    out->aad_hex = NULL;  
     out->input = NULL;
     out->output = NULL;
     out->digest_mode = false;
     out->subcommand = SUBCMD_NONE;
+    out->hmac_mode = false;
+    out->cmac_mode = false;
+    out->verify_file = NULL;
 
     if (argc >= 2 && strcmp(argv[1], "dgst") == 0) {
         out->subcommand = SUBCMD_DGST;
@@ -110,13 +179,14 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
         {"decrypt", no_argument, 0, 0},
         {"key", required_argument, 0, 0},
         {"iv", required_argument, 0, 0},
+        {"aad", required_argument, 0, 0},      
         {"input", required_argument, 0, 0},
         {"output", required_argument, 0, 0},
         {"help", no_argument, 0, 0},
         {"hmac", no_argument, 0, 0},           
         {"cmac", no_argument, 0, 0},           
         {"verify", required_argument, 0, 0}, 
-        {0,0,0,0}
+        {0, 0, 0, 0}
     };
 
     int opt_index = 0;
@@ -131,39 +201,30 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
 
         if (strcmp(name, "algorithm") == 0) {
             out->algorithm = strdup(optarg);
-
         } else if (strcmp(name, "mode") == 0) {
             out->mode = strdup(optarg);
-
         } else if (strcmp(name, "encrypt") == 0) {
             out->encrypt = true;
-
         } else if (strcmp(name, "decrypt") == 0) {
             out->decrypt = true;
-
         } else if (strcmp(name, "key") == 0) {
             if (optarg[0] == '@') out->key_hex = strdup(optarg + 1);
             else out->key_hex = strdup(optarg);
-
         } else if (strcmp(name, "iv") == 0) {
             if (optarg[0] == '@') out->iv_hex = strdup(optarg + 1);
             else out->iv_hex = strdup(optarg);
-
+        } else if (strcmp(name, "aad") == 0) {
+            out->aad_hex = strdup(optarg);
         } else if (strcmp(name, "input") == 0) {
             out->input = strdup(optarg);
-
         } else if (strcmp(name, "output") == 0) {
             out->output = strdup(optarg);
-        
         } else if (strcmp(name, "hmac") == 0) {
             out->hmac_mode = true;
-       
         } else if (strcmp(name, "cmac") == 0) {
             out->cmac_mode = true;
-       
         } else if (strcmp(name, "verify") == 0) {
             out->verify_file = strdup(optarg);
-
         } else if (strcmp(name, "help") == 0) {
             print_usage(argv[0]);
             return 1;
@@ -179,15 +240,27 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
 
 int validate_dgst_arguments(cli_args_t *args, const char *prog_name) {
     (void)prog_name;
+    
+    if (args->hmac_mode && !args->key_hex) {
+        fprintf(stderr, "Error: --key is required when using --hmac\n");
+        return 2;
+    }
+    
+    if (args->verify_file) {
+        FILE *test = fopen(args->verify_file, "r");
+        if (!test) {
+            fprintf(stderr, "Error: Verify file '%s' cannot be opened\n", args->verify_file);
+            return 2;
+        }
+        fclose(test);
+    }
+    
     if (!args->algorithm) {
         fprintf(stderr, "Error: --algorithm is required for dgst command\n");
         fprintf(stderr, "Supported algorithms: sha256, blake2b\n");
         return 2;
     }
-    if (args->hmac_mode && !args->key_hex) {
-        fprintf(stderr, "Error: --key is required when using --hmac\n");
-        return 2;
-    }
+
     if (strcmp(args->algorithm, "sha256") != 0 && 
         strcmp(args->algorithm, "blake2b") != 0) {
         fprintf(stderr, "Error: Unsupported hash algorithm '%s'\n", args->algorithm);
@@ -205,13 +278,18 @@ int validate_dgst_arguments(cli_args_t *args, const char *prog_name) {
         return 2;
     }
     
-    if (args->key_hex) {
-        fprintf(stderr, "Error: --key cannot be used with dgst command\n");
+    if (args->key_hex && !args->hmac_mode) {
+        fprintf(stderr, "Error: --key cannot be used without --hmac flag\n");
         return 2;
     }
     
     if (args->iv_hex) {
         fprintf(stderr, "Error: --iv cannot be used with dgst command\n");
+        return 2;
+    }
+    
+    if (args->aad_hex) {
+        fprintf(stderr, "Error: --aad cannot be used with dgst command\n");
         return 2;
     }
 
@@ -244,19 +322,18 @@ int validate_crypto_arguments(cli_args_t *args, const char *prog_name) {
         return 2;
     } else {
         const char *m = args->mode;
-        if (!(strcmp(m,"ecb")==0 || strcmp(m,"cbc")==0 || strcmp(m,"cfb")==0 ||
-              strcmp(m,"ofb")==0 || strcmp(m,"ctr")==0)) {
-            fprintf(stderr, "Error: invalid mode\n");
+        if (!(strcmp(m,"ecb")==0 || strcmp(m,"cbc")==0 || 
+              strcmp(m,"cfb")==0 || strcmp(m,"ofb")==0 || 
+              strcmp(m,"ctr")==0 || strcmp(m,"gcm")==0)) {
+            fprintf(stderr, "Error: invalid mode '%s'\n", m);
+            fprintf(stderr, "Supported modes: ecb, cbc, cfb, ofb, ctr, gcm\n");
             return 2;
         }
     }
-     if (args->verify_file) {
-        FILE *test = fopen(args->verify_file, "r");
-        if (!test) {
-            fprintf(stderr, "Error: Verify file '%s' cannot be opened\n", args->verify_file);
-            return 2;
-        }
-        fclose(test);
+    
+    if (args->aad_hex && !is_gcm_mode(args)) {
+        fprintf(stderr, "Error: --aad can only be used with --mode gcm\n");
+        return 2;
     }
 
     if (args->encrypt == args->decrypt) {
@@ -277,14 +354,20 @@ int validate_crypto_arguments(cli_args_t *args, const char *prog_name) {
     }
 
     if (args->iv_hex) {
-        if (!is_hex_string(args->iv_hex, 32)) {
-            fprintf(stderr, "Error: iv must be 32 hex chars\n");
-            return 2;
-        }
-        if (args->encrypt) {
-            fprintf(stderr, "Warning: --iv ignored during encryption\n");
-            free(args->iv_hex);
-            args->iv_hex = NULL;
+        if (is_gcm_mode(args)) {
+            if (validate_gcm_nonce(args, prog_name) != 0) {
+                return 2;
+            }
+        } else {
+            if (!is_hex_string(args->iv_hex, 32)) {
+                fprintf(stderr, "Error: iv must be 32 hex chars\n");
+                return 2;
+            }
+            if (args->encrypt) {
+                fprintf(stderr, "Warning: --iv ignored during encryption\n");
+                free(args->iv_hex);
+                args->iv_hex = NULL;
+            }
         }
     }
 
@@ -310,6 +393,8 @@ void free_cli_args(cli_args_t *args) {
     free(args->mode);
     free(args->key_hex);
     free(args->iv_hex);
+    free(args->aad_hex);  
     free(args->input);
     free(args->output);
+    if (args->verify_file) free(args->verify_file);
 }
