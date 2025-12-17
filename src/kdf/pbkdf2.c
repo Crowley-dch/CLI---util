@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <time.h>
-
+#include <string.h> 
 #include <sys/random.h>
 
 static void pbkdf2_f(const uint8_t *password, size_t password_len,

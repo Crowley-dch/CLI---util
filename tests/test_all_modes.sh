@@ -10,4 +10,7 @@ set -euo pipefail
 ./tests/test_sprint6.sh
 ./tests/test_aad.sh
 ./tests/test_gcm_security.sh
+./tests/test_kdf_comprehensive.c
+./tests/test_kdf_rfc.c 
+./tests/test_hkdf.c 
 echo "[ALL] All mode tests passed."

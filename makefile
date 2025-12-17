@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -fstack-protector
+CFLAGS = -Wall -Wextra -O2 -fstack-protector -Wno-deprecated-declarations
 LIBS = -lcrypto
 
 SRC_DIR = src
@@ -7,6 +7,7 @@ MODES_DIR = src/modes
 HASH_DIR = src/hash
 MAC_DIR = src/mac
 KDF_DIR = src/kdf
+TESTS_DIR = tests
 
 OBJS = \
     $(SRC_DIR)/cli_parser.o \
@@ -23,7 +24,8 @@ OBJS = \
     $(HASH_DIR)/sha256.o \
     $(HASH_DIR)/blake2b.o \
     $(MAC_DIR)/hmac.o \
-    $(KDF_DIR)/pbkdf2.o
+    $(KDF_DIR)/pbkdf2.o \
+    $(KDF_DIR)/hkdf.o  
 
 BIN = cryptocore
 
@@ -48,7 +50,8 @@ $(SRC_DIR)/main.o: $(SRC_DIR)/main.c \
                    $(HASH_DIR)/sha256.h \
                    $(HASH_DIR)/blake2b.h \
                    $(MAC_DIR)/hmac.h \
-                   $(KDF_DIR)/pbkdf2.h
+                   $(KDF_DIR)/pbkdf2.h \
+                   $(KDF_DIR)/hkdf.h  # НОВОЕ: добавлена зависимость
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SRC_DIR)/csprng.o: $(SRC_DIR)/csprng.c $(SRC_DIR)/csprng.h
@@ -84,10 +87,44 @@ $(MAC_DIR)/hmac.o: $(MAC_DIR)/hmac.c $(MAC_DIR)/hmac.h
 $(KDF_DIR)/pbkdf2.o: $(KDF_DIR)/pbkdf2.c $(KDF_DIR)/pbkdf2.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(KDF_DIR)/hkdf.o: $(KDF_DIR)/hkdf.c $(KDF_DIR)/hkdf.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+TEST_KDF_OBJS = $(KDF_DIR)/pbkdf2.o $(KDF_DIR)/hkdf.o $(MAC_DIR)/hmac.o $(HASH_DIR)/sha256.o
+
+test_kdf_rfc: $(TESTS_DIR)/test_kdf_rfc.c $(TEST_KDF_OBJS)
+	$(CC) $(CFLAGS) -o $(TESTS_DIR)/test_kdf_rfc $(TESTS_DIR)/test_kdf_rfc.c $(TEST_KDF_OBJS) $(LIBS)
+	$(TESTS_DIR)/test_kdf_rfc
+
+test_kdf_comprehensive: $(TESTS_DIR)/test_kdf_comprehensive.c $(TEST_KDF_OBJS)
+	$(CC) $(CFLAGS) -o $(TESTS_DIR)/test_kdf_comprehensive $(TESTS_DIR)/test_kdf_comprehensive.c $(TEST_KDF_OBJS) $(LIBS)
+	$(TESTS_DIR)/test_kdf_comprehensive
+
+test_hkdf: $(TESTS_DIR)/test_hkdf.c $(TEST_KDF_OBJS)
+	$(CC) $(CFLAGS) -o $(TESTS_DIR)/test_hkdf $(TESTS_DIR)/test_hkdf.c $(TEST_KDF_OBJS) $(LIBS)
+	$(TESTS_DIR)/test_hkdf
+
+test_kdf_all: test_kdf_rfc test_kdf_comprehensive test_hkdf
+
+test_all: $(BIN)
+	@echo "=== Running all tests ==="
+	@if [ -f "./tests/test_all_modes.sh" ]; then \
+		./tests/test_all_modes.sh; \
+	else \
+		echo "Warning: test_all_modes.sh not found"; \
+	fi
+	@if [ -f "./tests/test_derive.sh" ]; then \
+		./tests/test_derive.sh; \
+	else \
+		echo "Note: Create test_derive.sh for KDF testing"; \
+	fi
+
 clean:
-	rm -f $(OBJS) $(BIN)
+	rm -f $(OBJS) $(BIN) \
+	      $(TESTS_DIR)/test_kdf_rfc $(TESTS_DIR)/test_kdf_comprehensive $(TESTS_DIR)/test_hkdf \
+	      $(TESTS_DIR)/test_*.o
 
 distclean: clean
-	rm -f *~ $(SRC_DIR)/*~ $(MODES_DIR)/*~ $(HASH_DIR)/*~ $(MAC_DIR)/*~ $(KDF_DIR)/*~
+	rm -f *~ $(SRC_DIR)/*~ $(MODES_DIR)/*~ $(HASH_DIR)/*~ $(MAC_DIR)/*~ $(KDF_DIR)/*~ $(TESTS_DIR)/*~
 
-.PHONY: all clean distclean
+.PHONY: all clean distclean test_kdf_rfc test_kdf_comprehensive test_hkdf test_kdf_all test_all
