@@ -6,8 +6,14 @@
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <ctype.h>
+
 int is_gcm_mode(const cli_args_t *args) {
     return args->mode && strcmp(args->mode, "gcm") == 0;
+}
+
+int is_etm_mode(const cli_args_t *args) {
+    return args->mode && strcmp(args->mode, "etm") == 0;
 }
 
 int get_aad_bytes(const cli_args_t *args, uint8_t **aad, size_t *aad_len) {
@@ -71,7 +77,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr,
         "Usage:\n"
         "  Encryption/decryption:\n"
-        "    %s --algorithm aes --mode <ecb|cbc|cfb|ofb|ctr|gcm> (--encrypt | --decrypt)\n"
+        "    %s --algorithm aes --mode <ecb|cbc|cfb|ofb|ctr|gcm|etm> (--encrypt | --decrypt)\n"
         "       --key <hex32> [--iv <hex16/hex24>] [--aad <hex>] --input <file> [--output <file>]\n\n"
         "  Hashing (dgst command):\n"
         "    %s dgst --algorithm <sha256|blake2b> --input <file> [--output <file>]\n"
@@ -80,8 +86,8 @@ static void print_usage(const char *prog) {
         "  key: 32 hex chars (16 bytes). Leading '@' optionally allowed.\n"
         "  iv: 32 hex chars (16 bytes) for CBC/CFB/OFB/CTR\n"
         "  iv: 24 hex chars (12 bytes) for GCM (nonce, optional)\n"
-        "  aad: hex string for GCM mode (optional, authenticated but not encrypted)\n"
-        "  modes: ecb, cbc, cfb, ofb, ctr, gcm\n"
+        "  aad: hex string for GCM/ETM modes (optional, authenticated but not encrypted)\n"
+        "  modes: ecb, cbc, cfb, ofb, ctr, gcm, etm\n"
         "  hash algorithms: sha256, blake2b\n",
         prog, prog, prog
     );
@@ -324,15 +330,16 @@ int validate_crypto_arguments(cli_args_t *args, const char *prog_name) {
         const char *m = args->mode;
         if (!(strcmp(m,"ecb")==0 || strcmp(m,"cbc")==0 || 
               strcmp(m,"cfb")==0 || strcmp(m,"ofb")==0 || 
-              strcmp(m,"ctr")==0 || strcmp(m,"gcm")==0)) {
+              strcmp(m,"ctr")==0 || strcmp(m,"gcm")==0 ||
+              strcmp(m,"etm")==0)) {
             fprintf(stderr, "Error: invalid mode '%s'\n", m);
-            fprintf(stderr, "Supported modes: ecb, cbc, cfb, ofb, ctr, gcm\n");
+            fprintf(stderr, "Supported modes: ecb, cbc, cfb, ofb, ctr, gcm, etm\n");
             return 2;
         }
     }
     
-    if (args->aad_hex && !is_gcm_mode(args)) {
-        fprintf(stderr, "Error: --aad can only be used with --mode gcm\n");
+    if (args->aad_hex && !is_gcm_mode(args) && !is_etm_mode(args)) {
+        fprintf(stderr, "Error: --aad can only be used with --mode gcm or etm\n");
         return 2;
     }
 

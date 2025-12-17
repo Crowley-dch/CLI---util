@@ -3,10 +3,12 @@
 #include "cli_parser.h"
 #include "file_io.h"
 #include "ecb.h"
+#include "modes/gcm.h"
 #include "modes/cbc.h"
 #include "modes/cfb.h"
 #include "modes/ofb.h"
 #include "modes/ctr.h"
+#include "aead.h"
 #include "csprng.h"
 #include "hash/sha256.h"
 #include "hash/blake2b.h"
@@ -15,11 +17,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include "modes/cfb.h"
 #define AES_BLOCK_SIZE 16
+#define GCM_NONCE_SIZE 12
+#define GCM_TAG_SIZE 16
+#define ETM_TAG_SIZE 32  
 
 static int hex_to_bytes_local(const char *hex, unsigned char *out, size_t out_len);
 static void print_hex(const unsigned char *data, size_t len);
+static int read_etm_file(const char* filename, uint8_t** iv, 
+                        uint8_t** ciphertext, size_t* ciphertext_len,
+                        uint8_t** tag);
+static int write_etm_file(const char* filename, const uint8_t* iv,
+                         const uint8_t* ciphertext, size_t ciphertext_len,
+                         const uint8_t* tag);
 
 static int handle_hmac_command(const cli_args_t *args) {
     uint8_t key_bytes[1024]; 
@@ -148,6 +159,212 @@ static int handle_dgst_command(const cli_args_t *args) {
     return result;
 }
 
+static int read_gcm_file(const char* filename, uint8_t** nonce, 
+                         uint8_t** ciphertext, size_t* ciphertext_len,
+                         uint8_t** tag) {
+    FILE* fp = fopen(filename, "rb");
+    if (!fp) {
+        fprintf(stderr, "Failed to open file: %s\n", filename);
+        return -1;
+    }
+    
+    *nonce = malloc(GCM_NONCE_SIZE);
+    if (!*nonce) {
+        fclose(fp);
+        return -2;
+    }
+    
+    if (fread(*nonce, 1, GCM_NONCE_SIZE, fp) != GCM_NONCE_SIZE) {
+        fprintf(stderr, "Failed to read nonce from file\n");
+        free(*nonce);
+        fclose(fp);
+        return -3;
+    }
+    
+    fseek(fp, 0, SEEK_END);
+    long total_size = ftell(fp);
+    fseek(fp, GCM_NONCE_SIZE, SEEK_SET);
+    
+    if (total_size < GCM_NONCE_SIZE + GCM_TAG_SIZE) {
+        fprintf(stderr, "File too small for GCM format\n");
+        free(*nonce);
+        fclose(fp);
+        return -4;
+    }
+    
+    size_t cipher_len = total_size - GCM_NONCE_SIZE - GCM_TAG_SIZE;
+    *ciphertext_len = cipher_len;
+    
+    *ciphertext = malloc(cipher_len);
+    if (!*ciphertext) {
+        free(*nonce);
+        fclose(fp);
+        return -5;
+    }
+    
+    if (fread(*ciphertext, 1, cipher_len, fp) != cipher_len) {
+        fprintf(stderr, "Failed to read ciphertext\n");
+        free(*nonce);
+        free(*ciphertext);
+        fclose(fp);
+        return -6;
+    }
+    
+    *tag = malloc(GCM_TAG_SIZE);
+    if (!*tag) {
+        free(*nonce);
+        free(*ciphertext);
+        fclose(fp);
+        return -7;
+    }
+    
+    if (fread(*tag, 1, GCM_TAG_SIZE, fp) != GCM_TAG_SIZE) {
+        fprintf(stderr, "Failed to read tag\n");
+        free(*nonce);
+        free(*ciphertext);
+        free(*tag);
+        fclose(fp);
+        return -8;
+    }
+    
+    fclose(fp);
+    return 0;
+}
+
+static int write_gcm_file(const char* filename, const uint8_t* nonce,
+                          const uint8_t* ciphertext, size_t ciphertext_len,
+                          const uint8_t* tag) {
+    FILE* fp = fopen(filename, "wb");
+    if (!fp) {
+        fprintf(stderr, "Failed to open output file: %s\n", filename);
+        return -1;
+    }
+    
+    if (fwrite(nonce, 1, GCM_NONCE_SIZE, fp) != GCM_NONCE_SIZE) {
+        fprintf(stderr, "Failed to write nonce\n");
+        fclose(fp);
+        return -2;
+    }
+    
+    if (fwrite(ciphertext, 1, ciphertext_len, fp) != ciphertext_len) {
+        fprintf(stderr, "Failed to write ciphertext\n");
+        fclose(fp);
+        return -3;
+    }
+    
+    if (fwrite(tag, 1, GCM_TAG_SIZE, fp) != GCM_TAG_SIZE) {
+        fprintf(stderr, "Failed to write tag\n");
+        fclose(fp);
+        return -4;
+    }
+    
+    fclose(fp);
+    return 0;
+}
+
+static int read_etm_file(const char* filename, uint8_t** iv, 
+                        uint8_t** ciphertext, size_t* ciphertext_len,
+                        uint8_t** tag) {
+    FILE* fp = fopen(filename, "rb");
+    if (!fp) {
+        fprintf(stderr, "Failed to open file: %s\n", filename);
+        return -1;
+    }
+    
+    *iv = malloc(AES_BLOCK_SIZE);
+    if (!*iv) {
+        fclose(fp);
+        return -2;
+    }
+    
+    if (fread(*iv, 1, AES_BLOCK_SIZE, fp) != AES_BLOCK_SIZE) {
+        fprintf(stderr, "Failed to read IV from file\n");
+        free(*iv);
+        fclose(fp);
+        return -3;
+    }
+    
+    fseek(fp, 0, SEEK_END);
+    long total_size = ftell(fp);
+    fseek(fp, AES_BLOCK_SIZE, SEEK_SET);
+    
+    if (total_size < AES_BLOCK_SIZE + ETM_TAG_SIZE) {
+        fprintf(stderr, "File too small for ETM format\n");
+        free(*iv);
+        fclose(fp);
+        return -4;
+    }
+    
+    size_t cipher_len = total_size - AES_BLOCK_SIZE - ETM_TAG_SIZE;
+    *ciphertext_len = cipher_len;
+    
+    *ciphertext = malloc(cipher_len);
+    if (!*ciphertext) {
+        free(*iv);
+        fclose(fp);
+        return -5;
+    }
+    
+    if (fread(*ciphertext, 1, cipher_len, fp) != cipher_len) {
+        fprintf(stderr, "Failed to read ciphertext\n");
+        free(*iv);
+        free(*ciphertext);
+        fclose(fp);
+        return -6;
+    }
+    
+    *tag = malloc(ETM_TAG_SIZE);
+    if (!*tag) {
+        free(*iv);
+        free(*ciphertext);
+        fclose(fp);
+        return -7;
+    }
+    
+    if (fread(*tag, 1, ETM_TAG_SIZE, fp) != ETM_TAG_SIZE) {
+        fprintf(stderr, "Failed to read tag\n");
+        free(*iv);
+        free(*ciphertext);
+        free(*tag);
+        fclose(fp);
+        return -8;
+    }
+    
+    fclose(fp);
+    return 0;
+}
+
+static int write_etm_file(const char* filename, const uint8_t* iv,
+                         const uint8_t* ciphertext, size_t ciphertext_len,
+                         const uint8_t* tag) {
+    FILE* fp = fopen(filename, "wb");
+    if (!fp) {
+        fprintf(stderr, "Failed to open output file: %s\n", filename);
+        return -1;
+    }
+    
+    if (fwrite(iv, 1, AES_BLOCK_SIZE, fp) != AES_BLOCK_SIZE) {
+        fprintf(stderr, "Failed to write IV\n");
+        fclose(fp);
+        return -2;
+    }
+    
+    if (fwrite(ciphertext, 1, ciphertext_len, fp) != ciphertext_len) {
+        fprintf(stderr, "Failed to write ciphertext\n");
+        fclose(fp);
+        return -3;
+    }
+    
+    if (fwrite(tag, 1, ETM_TAG_SIZE, fp) != ETM_TAG_SIZE) {
+        fprintf(stderr, "Failed to write tag\n");
+        fclose(fp);
+        return -4;
+    }
+    
+    fclose(fp);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     int rc = 0;
     cli_args_t args;
@@ -203,6 +420,16 @@ int main(int argc, char **argv) {
         iv_from_user = 1;
     }
 
+    uint8_t* aad = NULL;
+    size_t aad_len = 0;
+    if (args.aad_hex) {
+        if (get_aad_bytes(&args, &aad, &aad_len) != 0) {
+            fprintf(stderr, "[ERROR] Failed to parse AAD\n");
+            free_cli_args(&args);
+            return 4;
+        }
+    }
+
     unsigned char *inbuf = NULL;
     size_t inlen = 0;
     unsigned char *cipher_in = NULL;
@@ -233,6 +460,96 @@ int main(int argc, char **argv) {
             rc = encrypt_ecb(inbuf, inlen, key, &outbuf, &outlen);
             if (rc == 0)
                 rc = write_file_atomic(args.output, outbuf, outlen);
+        } else if (strcmp(args.mode, "gcm") == 0) {
+            uint8_t nonce[GCM_NONCE_SIZE];
+            if (generate_random_bytes(nonce, GCM_NONCE_SIZE) != 0) {
+                fprintf(stderr, "[ERROR] Failed to generate nonce\n");
+                rc = 14;
+                goto cleanup;
+            }
+            
+            printf("[INFO] Generated nonce: ");
+            print_hex(nonce, GCM_NONCE_SIZE);
+            printf("\n");
+            
+            uint8_t* ciphertext = malloc(inlen);
+            if (!ciphertext) {
+                fprintf(stderr, "[ERROR] Memory allocation failed\n");
+                rc = 15;
+                goto cleanup;
+            }
+            
+            uint8_t tag[GCM_TAG_SIZE];
+            
+            rc = gcm_encrypt(inbuf, inlen, 
+                        key, sizeof(key),
+                        nonce, GCM_NONCE_SIZE,
+                        aad, aad_len,
+                        ciphertext,
+                        tag, GCM_TAG_SIZE);
+                    
+            if (rc >= 0) {
+                printf("[INFO] Encryption successful, ciphertext length: %d bytes\n", rc);
+                printf("[INFO] Tag: ");
+                print_hex(tag, GCM_TAG_SIZE);
+                printf("\n");
+                
+                rc = write_gcm_file(args.output, nonce, ciphertext, rc, tag);
+                if (rc == 0) {
+                    printf("[SUCCESS] GCM encryption completed successfully\n");
+                } else {
+                    fprintf(stderr, "[ERROR] Failed to write GCM file\n");
+                }
+            } else {
+                fprintf(stderr, "[ERROR] GCM encryption failed\n");
+            }
+            
+            free(ciphertext);
+            
+        } else if (strcmp(args.mode, "etm") == 0) {
+            // Encrypt-then-MAC mode
+            uint8_t iv_local[AES_BLOCK_SIZE];
+            if (generate_random_bytes(iv_local, AES_BLOCK_SIZE) != 0) {
+                fprintf(stderr, "[ERROR] Failed to generate IV\n");
+                rc = 16;
+                goto cleanup;
+            }
+            
+            printf("[INFO] Generated IV: ");
+            print_hex(iv_local, AES_BLOCK_SIZE);
+            printf("\n");
+            
+            uint8_t* ciphertext = NULL;
+            size_t ciphertext_len = 0;
+            uint8_t* tag = NULL;
+            size_t tag_len = 0;
+            
+            rc = etm_encrypt(inbuf, inlen,
+                           key, sizeof(key),
+                           iv_local, AES_BLOCK_SIZE,
+                           aad, aad_len,
+                           &ciphertext, &ciphertext_len,
+                           &tag, &tag_len);
+            
+            if (rc == 0) {
+                printf("[INFO] ETM encryption successful\n");
+                printf("[INFO] Tag: ");
+                print_hex(tag, ETM_TAG_SIZE);
+                printf("\n");
+                
+                rc = write_etm_file(args.output, iv_local, ciphertext, ciphertext_len, tag);
+                if (rc == 0) {
+                    printf("[SUCCESS] Encrypt-then-MAC completed successfully\n");
+                } else {
+                    fprintf(stderr, "[ERROR] Failed to write ETM file\n");
+                }
+            } else {
+                fprintf(stderr, "[ERROR] ETM encryption failed\n");
+            }
+            
+            free(ciphertext);
+            free(tag);
+            
         } else {
             if (generate_random_bytes(iv, AES_BLOCK_SIZE) != 0) {
                 fprintf(stderr, "[ERROR] Failed to generate IV\n");
@@ -271,6 +588,107 @@ int main(int argc, char **argv) {
             rc = decrypt_ecb(inbuf, inlen, key, &outbuf, &outlen);
             if (rc == 0)
                 rc = write_file_atomic(args.output, outbuf, outlen);
+        } else if (strcmp(args.mode, "gcm") == 0) {
+            uint8_t* nonce = NULL;
+            uint8_t* ciphertext = NULL;
+            uint8_t* tag = NULL;
+            size_t ciphertext_len = 0;
+            
+            rc = read_gcm_file(args.input, &nonce, &ciphertext, &ciphertext_len, &tag);
+            if (rc != 0) {
+                fprintf(stderr, "[ERROR] Failed to read GCM file\n");
+                rc = 24;
+                goto cleanup;
+            }
+            
+            if (iv_from_user) {
+                memcpy(nonce, iv, GCM_NONCE_SIZE);
+            }
+            
+            uint8_t* plaintext = malloc(ciphertext_len);
+            if (!plaintext) {
+                fprintf(stderr, "[ERROR] Memory allocation failed\n");
+                free(nonce);
+                free(ciphertext);
+                free(tag);
+                rc = 25;
+                goto cleanup;
+            }
+            
+            rc = gcm_decrypt(ciphertext, ciphertext_len,
+                            key, sizeof(key),
+                            nonce, GCM_NONCE_SIZE,
+                            aad, aad_len,
+                            tag, GCM_TAG_SIZE,
+                            plaintext);
+            
+            if (rc >= 0) {
+                printf("[SUCCESS] GCM decryption completed successfully\n");
+                
+                rc = write_file_atomic(args.output, plaintext, rc);
+                if (rc != 0) {
+                    fprintf(stderr, "[ERROR] Failed to write decrypted file\n");
+                }
+            } else {
+                fprintf(stderr, "[ERROR] Authentication failed: AAD mismatch or ciphertext tampered\n");
+                // Удаляем частично созданный файл при ошибке аутентификации
+                remove(args.output);
+                rc = 26;  // Код ошибки аутентификации
+            }
+            
+            free(nonce);
+            free(ciphertext);
+            free(tag);
+            free(plaintext);
+            
+        } else if (strcmp(args.mode, "etm") == 0) {
+            // Encrypt-then-MAC decryption
+            uint8_t* iv_local = NULL;
+            uint8_t* ciphertext = NULL;
+            uint8_t* tag = NULL;
+            size_t ciphertext_len = 0;
+            
+            rc = read_etm_file(args.input, &iv_local, &ciphertext, &ciphertext_len, &tag);
+            if (rc != 0) {
+                fprintf(stderr, "[ERROR] Failed to read ETM file\n");
+                rc = 27;
+                goto cleanup;
+            }
+            
+            // Если пользователь указал свой IV, используем его
+            if (iv_from_user) {
+                memcpy(iv_local, iv, AES_BLOCK_SIZE);
+            }
+            
+            uint8_t* plaintext = NULL;
+            size_t plaintext_len = 0;
+            
+            rc = etm_decrypt(ciphertext, ciphertext_len,
+                           key, sizeof(key),
+                           iv_local, AES_BLOCK_SIZE,
+                           aad, aad_len,
+                           tag, ETM_TAG_SIZE,
+                           &plaintext, &plaintext_len);
+            
+            if (rc == 0) {
+                printf("[SUCCESS] Encrypt-then-MAC decryption completed successfully\n");
+                
+                rc = write_file_atomic(args.output, plaintext, plaintext_len);
+                if (rc != 0) {
+                    fprintf(stderr, "[ERROR] Failed to write decrypted file\n");
+                }
+            } else {
+                fprintf(stderr, "[ERROR] Authentication failed: invalid tag or tampered data\n");
+                // Удаляем частично созданный файл при ошибке аутентификации
+                remove(args.output);
+                rc = 28;  // Код ошибки аутентификации
+            }
+            
+            free(iv_local);
+            free(ciphertext);
+            free(tag);
+            free(plaintext);
+            
         } else {
             if (iv_from_user) {
                 if (read_file(args.input, &cipher_in, &cipher_in_len) != 0) {
@@ -309,6 +727,7 @@ int main(int argc, char **argv) {
             free(cipher_in);
             cipher_in = NULL;
         }
+    
     } else {
         fprintf(stderr, "[ERROR] Neither encrypt nor decrypt selected\n");
         rc = 30;
@@ -317,6 +736,7 @@ int main(int argc, char **argv) {
 cleanup:
     free(inbuf);
     free(outbuf);
+    free(aad);
     free_cli_args(&args);
     return rc;
 }

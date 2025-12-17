@@ -8,7 +8,6 @@
 #define SHA256_OUTPUT_SIZE 32
 
 static void hmac_prepare_key(const uint8_t *key, size_t key_len, uint8_t *prepared_key) {
-    SHA256_CTX ctx;
     
     if (key_len > SHA256_BLOCK_SIZE) {
         sha256_hash(key, key_len, prepared_key);

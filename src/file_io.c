@@ -83,21 +83,33 @@ int read_file_with_iv(const char *path, unsigned char iv[16],
         return -3;
     }
 
-    fread(iv, 1, AES_BLOCK_SIZE, fp);
+    size_t bytes_read = fread(iv, 1, AES_BLOCK_SIZE, fp);
+    if (bytes_read != AES_BLOCK_SIZE) {
+        fclose(fp);
+        fprintf(stderr, "[ERROR] Failed to read IV from file\n");
+        return -4;
+    }
+
     size_t payload_len = total - AES_BLOCK_SIZE;
     *ciphertext = malloc(payload_len);
     if (!*ciphertext) {
         fclose(fp);
-        return -4;
+        return -5;
     }
 
-    fread(*ciphertext, 1, payload_len, fp);
+    bytes_read = fread(*ciphertext, 1, payload_len, fp);
     fclose(fp);
+    
+    if (bytes_read != payload_len) {
+        free(*ciphertext);
+        fprintf(stderr, "[ERROR] Failed to read ciphertext from file\n");
+        return -6;
+    }
+    
     *cipher_len = payload_len;
     printf("[INFO] Read file %s (%ld bytes, IV + ciphertext)\n", path, total);
     return 0;
 }
-
 
 int write_hash_to_file(const char *output_path, const char *hash_value, const char *input_file) {
     if (!output_path || !hash_value || !input_file) {
@@ -186,11 +198,14 @@ int compute_file_hash_stream(const char *filename,
     
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
-    rewind(file);
+    
+    // ИСПРАВЛЕНО: используем fseek вместо rewind после fclose
+    fseek(file, 0, SEEK_SET);
     
     if (file_size == 0) {
+        // Для пустого файла - просто закрываем
         fclose(file);
-        rewind(file);
+        // Не вызываем rewind после fclose!
     }
     
     unsigned char buffer[HASH_BUFFER_SIZE];

@@ -11,7 +11,8 @@ EXPECTED1="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 EXPECTED2="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 echo "Testing NIST vector 1 ('abc')..."
-RESULT1=$(./cryptocore dgst --algorithm sha256 --input vector1.bin | awk '{print $1}')
+# Извлекаем только первые 64 символа (хеш SHA-256)
+RESULT1=$(./cryptocore dgst --algorithm sha256 --input vector1.bin | grep -oE '^[0-9a-f]{64}' | head -1 | tr -d '[:space:]')
 
 if [ "$RESULT1" = "$EXPECTED1" ]; then
     echo "✓ NIST vector 1: PASS"
@@ -23,7 +24,7 @@ else
 fi
 
 echo "Testing NIST vector 2 (empty)..."
-RESULT2=$(./cryptocore dgst --algorithm sha256 --input vector2.bin | awk '{print $1}')
+RESULT2=$(./cryptocore dgst --algorithm sha256 --input vector2.bin | grep -oE '^[0-9a-f]{64}' | head -1 | tr -d '[:space:]')
 
 if [ "$RESULT2" = "$EXPECTED2" ]; then
     echo "✓ NIST vector 2: PASS"

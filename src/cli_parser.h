@@ -2,7 +2,8 @@
 #define CLI_PARSER_H
 
 #include <stdbool.h>
-
+#include <stddef.h>  
+#include <stdint.h>
 typedef enum {
     SUBCMD_NONE,    
     SUBCMD_DGST     
