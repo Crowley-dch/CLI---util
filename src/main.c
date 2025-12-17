@@ -10,6 +10,7 @@
 #include "modes/ctr.h"
 #include "aead.h"
 #include "csprng.h"
+#include "kdf/pbkdf2.h"
 #include "hash/sha256.h"
 #include "hash/blake2b.h"
 #include "mac/hmac.h"
@@ -31,6 +32,95 @@ static int read_etm_file(const char* filename, uint8_t** iv,
 static int write_etm_file(const char* filename, const uint8_t* iv,
                          const uint8_t* ciphertext, size_t ciphertext_len,
                          const uint8_t* tag);
+
+
+static int handle_derive_command(const cli_args_t *args) {
+    uint8_t salt[64]; 
+    size_t salt_len = 0;
+    
+    if (args->salt_hex) {
+       
+        salt_len = strlen(args->salt_hex) / 2;
+        if (salt_len > sizeof(salt)) {
+            fprintf(stderr, "[ERROR] Salt too long (max %zu bytes)\n", sizeof(salt));
+            return 1;
+        }
+        
+        for (size_t i = 0; i < salt_len; i++) {
+            if (sscanf(args->salt_hex + i * 2, "%2hhx", &salt[i]) != 1) {
+                fprintf(stderr, "[ERROR] Invalid salt format\n");
+                return 1;
+            }
+        }
+        printf("[INFO] Using provided salt (%zu bytes)\n", salt_len);
+    } else {
+        salt_len = 16; 
+        if (generate_random_salt(salt, salt_len) != 0) {
+            fprintf(stderr, "[ERROR] Failed to generate random salt\n");
+            return 1;
+        }
+        printf("[INFO] Generated random salt (%zu bytes)\n", salt_len);
+    }
+    
+    uint8_t *derived_key = malloc(args->key_length);
+    if (!derived_key) {
+        fprintf(stderr, "[ERROR] Memory allocation failed\n");
+        return 1;
+    }
+    
+    printf("[INFO] Deriving %zu-byte key with %u iterations...\n", 
+           args->key_length, args->iterations);
+    
+    if (pbkdf2_hmac_sha256((uint8_t*)args->password, strlen(args->password),
+                           salt, salt_len,
+                           args->iterations, args->key_length,
+                           derived_key) != 0) {
+        fprintf(stderr, "[ERROR] Key derivation failed\n");
+        free(derived_key);
+        return 1;
+    }
+    
+    if (args->output) {
+        FILE *f = fopen(args->output, "wb");
+        if (!f) {
+            fprintf(stderr, "[ERROR] Cannot open output file '%s'\n", args->output);
+            free(derived_key);
+            return 1;
+        }
+        
+        if (fwrite(derived_key, 1, args->key_length, f) != args->key_length) {
+            fprintf(stderr, "[ERROR] Failed to write key to file\n");
+            fclose(f);
+            free(derived_key);
+            return 1;
+        }
+        
+        fclose(f);
+        printf("[INFO] Derived key written to '%s' (atomic)\n", args->output);
+        printf("[INFO] Salt: ");
+        for (size_t i = 0; i < salt_len; i++) printf("%02x", salt[i]);
+        printf("\n");
+    } else {
+        for (size_t i = 0; i < args->key_length; i++) {
+            printf("%02x", derived_key[i]);
+        }
+        printf(" ");
+        for (size_t i = 0; i < salt_len; i++) {
+            printf("%02x", salt[i]);
+        }
+        printf("\n");
+    }
+    
+    memset(derived_key, 0, args->key_length);
+    free(derived_key);
+    
+    if (args->password) {
+        memset((char*)args->password, 0, strlen(args->password));
+    }
+    
+    return 0;
+}
+
 
 static int handle_hmac_command(const cli_args_t *args) {
     uint8_t key_bytes[1024]; 
@@ -376,6 +466,12 @@ int main(int argc, char **argv) {
 
     if (args.subcommand == SUBCMD_DGST) {
         rc = handle_dgst_command(&args);
+        free_cli_args(&args);
+        return rc;
+    }
+    
+    if (args.subcommand == SUBCMD_DERIVE) {
+        rc = handle_derive_command(&args);
         free_cli_args(&args);
         return rc;
     }

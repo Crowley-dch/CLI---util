@@ -82,14 +82,18 @@ static void print_usage(const char *prog) {
         "  Hashing (dgst command):\n"
         "    %s dgst --algorithm <sha256|blake2b> --input <file> [--output <file>]\n"
         "    %s dgst --algorithm sha256 --hmac --key <hex> --input <file> [--verify <file>]\n\n"
+        "  Key derivation (derive command):\n"
+        "    %s derive --password <string> [--salt <hex>] [--iterations <n>] [--length <n>]\n"
+        "       [--password-file <file>] [--generate-salt] [--output <file>]\n\n"
         "Notes:\n"
         "  key: 32 hex chars (16 bytes). Leading '@' optionally allowed.\n"
         "  iv: 32 hex chars (16 bytes) for CBC/CFB/OFB/CTR\n"
         "  iv: 24 hex chars (12 bytes) for GCM (nonce, optional)\n"
         "  aad: hex string for GCM/ETM modes (optional, authenticated but not encrypted)\n"
         "  modes: ecb, cbc, cfb, ofb, ctr, gcm, etm\n"
-        "  hash algorithms: sha256, blake2b\n",
-        prog, prog, prog
+        "  hash algorithms: sha256, blake2b\n"
+        "  derive: PBKDF2-HMAC-SHA256 with 100,000 iterations by default\n",
+        prog, prog, prog, prog  
     );
 }
 
@@ -171,13 +175,27 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
     out->hmac_mode = false;
     out->cmac_mode = false;
     out->verify_file = NULL;
+    out->password = NULL;
+    out->salt_hex = NULL;
+    out->iterations = 100000;
+    out->key_length = 32;
+    out->generate_salt = false;
+    out->password_file = NULL;
 
     if (argc >= 2 && strcmp(argv[1], "dgst") == 0) {
         out->subcommand = SUBCMD_DGST;
         argc--;
         argv++;
     }
-
+    if (argc >= 2 && strcmp(argv[1], "dgst") == 0) {
+        out->subcommand = SUBCMD_DGST;
+        argc--;
+        argv++;
+    } else if (argc >= 2 && strcmp(argv[1], "derive") == 0) {  
+        out->subcommand = SUBCMD_DERIVE;
+        argc--;
+        argv++;
+    }
     static struct option long_options[] = {
         {"algorithm", required_argument, 0, 0},
         {"mode", required_argument, 0, 0},
@@ -192,6 +210,12 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
         {"hmac", no_argument, 0, 0},           
         {"cmac", no_argument, 0, 0},           
         {"verify", required_argument, 0, 0}, 
+        {"password", required_argument, 0, 0},
+        {"salt", required_argument, 0, 0},
+        {"iterations", required_argument, 0, 0},
+        {"length", required_argument, 0, 0},
+        {"generate-salt", no_argument, 0, 0},
+        {"password-file", required_argument, 0, 0},
         {0, 0, 0, 0}
     };
 
@@ -231,6 +255,18 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
             out->cmac_mode = true;
         } else if (strcmp(name, "verify") == 0) {
             out->verify_file = strdup(optarg);
+        } else if (strcmp(name, "password") == 0) {
+            out->password = strdup(optarg);
+        } else if (strcmp(name, "salt") == 0) {
+            out->salt_hex = strdup(optarg);
+        } else if (strcmp(name, "iterations") == 0) {
+            out->iterations = (uint32_t)strtoul(optarg, NULL, 10);
+        } else if (strcmp(name, "length") == 0) {
+            out->key_length = (size_t)strtoul(optarg, NULL, 10);
+        } else if (strcmp(name, "generate-salt") == 0) {
+            out->generate_salt = true;
+        } else if (strcmp(name, "password-file") == 0) {
+            out->password_file = strdup(optarg);
         } else if (strcmp(name, "help") == 0) {
             print_usage(argv[0]);
             return 1;
@@ -239,11 +275,113 @@ int parse_cli_args(int argc, char **argv, cli_args_t *out) {
 
     if (out->subcommand == SUBCMD_DGST) {
         return validate_dgst_arguments(out, argv[0]);
+    } else if (out->subcommand == SUBCMD_DERIVE) {  
+        return validate_derive_arguments(out, argv[0]);
     }
 
     return validate_crypto_arguments(out, argv[0]);
 }
-
+int validate_derive_arguments(cli_args_t *args, const char *prog_name) {
+    (void)prog_name;
+    
+    if (!args->password && !args->password_file) {
+        char *env_pass = getenv("CRYPTOCORE_PASSWORD");
+        if (env_pass) {
+            args->password = strdup(env_pass);
+        } else {
+            fprintf(stderr, "Error: Password required (use --password or --password-file)\n");
+            return 2;
+        }
+    }
+    
+    if (args->password_file) {
+        FILE *f = fopen(args->password_file, "r");
+        if (!f) {
+            fprintf(stderr, "Error: Cannot open password file '%s'\n", args->password_file);
+            return 2;
+        }
+        
+        char buffer[1024];
+        if (!fgets(buffer, sizeof(buffer), f)) {
+            fprintf(stderr, "Error: Cannot read from password file\n");
+            fclose(f);
+            return 2;
+        }
+        fclose(f);
+        
+        size_t len = strlen(buffer);
+        if (len > 0 && buffer[len - 1] == '\n') {
+            buffer[len - 1] = '\0';
+        }
+        
+        if (args->password) {
+            free(args->password);
+        }
+        args->password = strdup(buffer);
+    }
+    
+    if (args->iterations < 10000) {
+        fprintf(stderr, "Warning: Low iteration count (%u). For security, use at least 100000 iterations\n", 
+                args->iterations);
+    }
+    
+    if (args->key_length == 0 || args->key_length > 1024) {
+        fprintf(stderr, "Error: Key length must be between 1 and 1024 bytes\n");
+        return 2;
+    }
+    
+    if (args->algorithm) {
+        fprintf(stderr, "Error: --algorithm cannot be used with derive command\n");
+        return 2;
+    }
+    if (args->mode) {
+        fprintf(stderr, "Error: --mode cannot be used with derive command\n");
+        return 2;
+    }
+    if (args->encrypt || args->decrypt) {
+        fprintf(stderr, "Error: --encrypt/--decrypt cannot be used with derive command\n");
+        return 2;
+    }
+    if (args->key_hex) {
+        fprintf(stderr, "Error: --key cannot be used with derive command\n");
+        return 2;
+    }
+    if (args->iv_hex) {
+        fprintf(stderr, "Error: --iv cannot be used with derive command\n");
+        return 2;
+    }
+    if (args->aad_hex) {
+        fprintf(stderr, "Error: --aad cannot be used with derive command\n");
+        return 2;
+    }
+    if (args->hmac_mode || args->cmac_mode) {
+        fprintf(stderr, "Error: --hmac/--cmac cannot be used with derive command\n");
+        return 2;
+    }
+    if (args->verify_file) {
+        fprintf(stderr, "Error: --verify cannot be used with derive command\n");
+        return 2;
+    }
+    
+    if (args->salt_hex) {
+        size_t len = strlen(args->salt_hex);
+        if (len % 2 != 0) {
+            fprintf(stderr, "Error: Salt must be a valid hexadecimal string (even number of chars)\n");
+            return 2;
+        }
+        for (size_t i = 0; i < len; i++) {
+            char c = args->salt_hex[i];
+            if (!((c >= '0' && c <= '9') ||
+                  (c >= 'a' && c <= 'f') ||
+                  (c >= 'A' && c <= 'F'))) {
+                fprintf(stderr, "Error: Invalid salt format. Must be hexadecimal.\n");
+                return 2;
+            }
+        }
+    }
+    
+    return 0;
+}
 int validate_dgst_arguments(cli_args_t *args, const char *prog_name) {
     (void)prog_name;
     
@@ -404,4 +542,11 @@ void free_cli_args(cli_args_t *args) {
     free(args->input);
     free(args->output);
     if (args->verify_file) free(args->verify_file);
+    if (args->password) {
+        memset(args->password, 0, strlen(args->password));
+        free(args->password);
+    }
+    free(args->salt_hex);
+    free(args->password_file);
+
 }
