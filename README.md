@@ -104,6 +104,7 @@ make test
 # Вывод: [INFO] Generated random key: 1a2b3c4d5e6f7890fedcba9876543210
 ```
 ## Структура проекта 
+```text
 cryptocore/
 ├── src/                    # Исходный код на C
 │   ├── main.c             # Точка входа
@@ -129,14 +130,11 @@ cryptocore/
 ├── tests/                 # Тестовая система
 │   ├── unit/             # Unit-тесты
 │   ├── integration/      # Интеграционные тесты
-│   ├── vectors/          # Тестовые векторы
-│   └── test_runner.c     # Главный раннер тестов
+│   ├── scripts/          # Тестовые векторы
 ├── docs/                 # Документация
 │   ├── API.md           # Документация API
 │   ├── USERGUIDE.md     # Руководство пользователя
 │   └── DEVELOPMENT.md   # Руководство разработчика
 ├── Makefile              # Система сборки
 ├── README.md             # Этот файл
-├── CHANGELOG.md          # История изменений
-├── CONTRIBUTING.md       # Правила участия
-└── SECURITY.md           # Политика безопасности
+```
