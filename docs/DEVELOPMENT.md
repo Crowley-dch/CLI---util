@@ -39,6 +39,3 @@ cryptocore/
 │ └── DEVELOPMENT.md
 ├── Makefile # Build system
 ├── README.md # Project overview
-├── CHANGELOG.md # Version history
-├── CONTRIBUTING.md # Contribution guidelines
-└── SECURITY.md # Security policy
