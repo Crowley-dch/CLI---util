@@ -103,3 +103,40 @@ make test
 
 # Вывод: [INFO] Generated random key: 1a2b3c4d5e6f7890fedcba9876543210
 ```
+## Структура проекта 
+cryptocore/
+├── src/                    # Исходный код на C
+│   ├── main.c             # Точка входа
+│   ├── cli_parser.c/h     # Парсер командной строки
+│   ├── file_io.c/h        # Работа с файлами
+│   ├── csprng.c/h         # Генерация случайных чисел
+│   ├── aead.c/h           # Аутентифицированное шифрование
+│   ├── ecb.c/h            # Режим ECB
+│   ├── modes/             # Режимы шифрования
+│   │   ├── cbc.c/h
+│   │   ├── cfb.c/h
+│   │   ├── ofb.c/h
+│   │   ├── ctr.c/h
+│   │   └── gcm.c/h
+│   ├── hash/              # Хеш-функции
+│   │   ├── sha256.c/h     # SHA-256 (реализация с нуля)
+│   │   └── blake2b.c/h    # BLAKE2b (через OpenSSL)
+│   ├── mac/               # Коды аутентификации
+│   │   └── hmac.c/h       # HMAC-SHA256
+│   └── kdf/               # Формирование ключей
+│       ├── pbkdf2.c/h     # PBKDF2-HMAC-SHA256
+│       └── hkdf.c/h       # Иерархия ключей
+├── tests/                 # Тестовая система
+│   ├── unit/             # Unit-тесты
+│   ├── integration/      # Интеграционные тесты
+│   ├── vectors/          # Тестовые векторы
+│   └── test_runner.c     # Главный раннер тестов
+├── docs/                 # Документация
+│   ├── API.md           # Документация API
+│   ├── USERGUIDE.md     # Руководство пользователя
+│   └── DEVELOPMENT.md   # Руководство разработчика
+├── Makefile              # Система сборки
+├── README.md             # Этот файл
+├── CHANGELOG.md          # История изменений
+├── CONTRIBUTING.md       # Правила участия
+└── SECURITY.md           # Политика безопасности
