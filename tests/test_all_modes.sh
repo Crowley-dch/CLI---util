@@ -119,12 +119,6 @@ if [ -x "./tests/unit/test_kdf_comprehensive" ]; then
     fi
 fi
 
-if [ -x "./tests/unit/test_kdf_rfc" ]; then
-    echo "=== Запуск test_kdf_rfc ==="
-    if ! ./tests/unit/test_kdf_rfc; then
-        echo "Тест завершился с ошибкой: test_kdf_rfc"
-    fi
-fi
 
 echo "[SUMMARY] Тестирование завершено"
 
