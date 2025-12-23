@@ -21,7 +21,7 @@
 diff test.txt test2.txt && echo "Файлы идентичны"
 
 ```
-##2. Генерация ключа из пароля
+## 2. Генерация ключа из пароля
 ```bash
 ./cryptocore derive --password "Kafedra_izi" \
                   --generate-salt \
