@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
-#include "../src/kdf/hkdf.h"
+#include "src/kdf/hkdf.h"
 
 int main() {
     printf("=== HKDF Tests ===\n\n");

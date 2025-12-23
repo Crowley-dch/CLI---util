@@ -145,7 +145,8 @@ char *derive_hash_output_filename(const char *input, const char *algorithm) {
 
 static int is_hex_string(const char *s, size_t expect_len) {
     if (!s) return 0;
-    if (strlen(s) != expect_len) return 0;
+    size_t len = strlen(s);
+    if (len % 2 != 0) return 0;
 
     for (size_t i = 0; i < expect_len; ++i) {
         char c = s[i];
